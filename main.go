@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 
 	"github.com/libp2p/go-libp2p"
 	"github.com/libp2p/go-libp2p/core/crypto"
@@ -15,37 +16,28 @@ import (
 	"github.com/multiformats/go-multiaddr"
 )
 
-type Peer struct {
-	Id   peer.ID
-	Addr []multiaddr.Multiaddr
-	Host host.Host
-}
-
 const protocol = "/ipv6/1.0.0"
 
-func PeerCreation() (*Peer, error) {
-	privkey, _, err := crypto.GenerateKeyPair(crypto.RSA, 2048)
+// Create a new peer
+func createPeer() (host.Host, error) {
+	priv, _, err := crypto.GenerateKeyPair(crypto.RSA, 2048)
 	if err != nil {
-		return nil, fmt.Errorf("error generating keys: %s", err)
+		return nil, err
 	}
 
 	h, err := libp2p.New(
-		libp2p.Identity(privkey),
-		libp2p.ListenAddrStrings("/ip6/::/tcp/4001"), // listen on all IPv6
+		libp2p.Identity(priv),
+		libp2p.ListenAddrStrings("/ip6/::/tcp/0"),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("error creating host: %s", err)
+		return nil, err
 	}
-
-	return &Peer{
-		Id:   h.ID(),
-		Addr: h.Addrs(),
-		Host: h,
-	}, nil
+	return h, nil
 }
 
-func ConnectToPeer(ctx context.Context, h host.Host, peerAddr string) (*peer.AddrInfo, error) {
-	maddr, err := multiaddr.NewMultiaddr(peerAddr)
+// Connect to a remote peer
+func connectToPeer(ctx context.Context, h host.Host, addr string) (*peer.AddrInfo, error) {
+	maddr, err := multiaddr.NewMultiaddr(strings.TrimSpace(addr))
 	if err != nil {
 		return nil, fmt.Errorf("invalid multiaddress: %s", err)
 	}
@@ -63,86 +55,86 @@ func ConnectToPeer(ctx context.Context, h host.Host, peerAddr string) (*peer.Add
 	return info, nil
 }
 
+// Handle incoming stream
 func handleStream(stream network.Stream) {
-	fmt.Println("Got a new stream!")
-
+	fmt.Println("Got a new stream from:", stream.Conn().RemotePeer())
 	rw := bufio.NewReadWriter(bufio.NewReader(stream), bufio.NewWriter(stream))
-
-	go readData(rw)
-	go writeData(rw)
+	go readMessages(rw)
+	go writeMessages(rw)
 }
 
-func readData(rw *bufio.ReadWriter) {
+// Read messages from stream
+func readMessages(rw *bufio.ReadWriter) {
 	for {
-		str, err := rw.ReadString('\n')
+		msg, err := rw.ReadString('\n')
 		if err != nil {
-			fmt.Println("Error reading from buffer:", err)
+			fmt.Println("\nConnection closed:", err)
 			return
 		}
-
-		if str != "\n" {
-			fmt.Printf("\x1b[32m%s\x1b[0m> ", str)
+		msg = strings.TrimSpace(msg)
+		if msg != "" {
+			fmt.Printf("\rFriend: %s\n> ", msg)
 		}
 	}
 }
 
-func writeData(rw *bufio.ReadWriter) {
-	stdReader := bufio.NewReader(os.Stdin)
+// Write messages to stream
+func writeMessages(rw *bufio.ReadWriter) {
+	scanner := bufio.NewScanner(os.Stdin)
 	for {
 		fmt.Print("> ")
-		sendData, err := stdReader.ReadString('\n')
+		if !scanner.Scan() {
+			return
+		}
+		text := scanner.Text() + "\n"
+		_, err := rw.WriteString(text)
 		if err != nil {
-			fmt.Println("Error reading stdin:", err)
+			fmt.Println("Error writing:", err)
 			continue
 		}
-
-		_, err = rw.WriteString(sendData)
-		if err != nil {
-			fmt.Println("Error writing to buffer:", err)
-			continue
-		}
-
-		err = rw.Flush()
-		if err != nil {
-			fmt.Println("Error flushing buffer:", err)
-		}
+		rw.Flush()
 	}
 }
 
 func main() {
 	ctx := context.Background()
 
-	mypeer, err := PeerCreation()
+	h, err := createPeer()
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer mypeer.Host.Close()
+	defer h.Close()
 
-	fmt.Println("Peer ID:", mypeer.Id)
+	// Show peer info
+	fmt.Println("Peer ID:", h.ID())
 	fmt.Println("Peer MultiAddresses:")
-	for _, addr := range mypeer.Addr {
-		fmt.Printf("%s/p2p/%s\n", addr, mypeer.Id)
+	for _, a := range h.Addrs() {
+		fmt.Printf("%s/p2p/%s\n", a, h.ID())
 	}
 
-	mypeer.Host.SetStreamHandler(protocol, handleStream)
+	// Handle incoming streams
+	h.SetStreamHandler(protocol, handleStream)
 
-	var peerAddr string
-	fmt.Print("Enter friend's MultiAddress: ")
-	fmt.Scan(&peerAddr)
+	// Ask for friend's multiaddress
+	fmt.Print("Enter friend's MultiAddress (leave empty to wait for incoming): ")
+	reader := bufio.NewReader(os.Stdin)
+	peerAddr, _ := reader.ReadString('\n')
+	peerAddr = strings.TrimSpace(peerAddr)
 
-	info, err := ConnectToPeer(ctx, mypeer.Host, peerAddr)
-	if err != nil {
-		log.Fatal(err)
+	if peerAddr != "" {
+		info, err := connectToPeer(ctx, h, peerAddr)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		stream, err := h.NewStream(ctx, info.ID, protocol)
+		if err != nil {
+			log.Fatal("Stream open failed:", err)
+		}
+		rw := bufio.NewReadWriter(bufio.NewReader(stream), bufio.NewWriter(stream))
+		go writeMessages(rw)
+		go readMessages(rw)
 	}
 
-	stream, err := mypeer.Host.NewStream(ctx, info.ID, protocol)
-	if err != nil {
-		log.Fatal("Stream open failed:", err)
-	}
-
-	rw := bufio.NewReadWriter(bufio.NewReader(stream), bufio.NewWriter(stream))
-	go writeData(rw)
-	go readData(rw)
-
-	select {}
+	select {} // keep program running
 }
