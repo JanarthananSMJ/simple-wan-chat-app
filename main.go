@@ -31,7 +31,7 @@ func PeerCreation() (*Peer, error) {
 
 	h, err := libp2p.New(
 		libp2p.Identity(privkey),
-		libp2p.ListenAddrStrings("/ip6/::/tcp/0"), // listen on all IPv6
+		libp2p.ListenAddrStrings("/ip6/::/tcp/4001"), // listen on all IPv6
 	)
 	if err != nil {
 		return nil, fmt.Errorf("error creating host: %s", err)
