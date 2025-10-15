@@ -1,0 +1,45 @@
+# Binaries for programs and plugins
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test binaries
+*_test
+
+# Go module cache
+.cache/go-build/
+
+# Dependency directories (vendor directory)
+vendor/
+
+# Compiled packages and executables
+*.o
+*.a
+*.gcno
+*.gcov
+*.prof
+
+# Logs and temporary files
+*.log
+*.tmp
+tmp/
+
+# Editor-specific files
+.idea/ # IntelliJ IDEA
+.vscode/ # Visual Studio Code
+*.sublime-project
+*.sublime-workspace
+.DS_Store # macOS specific
+Thumbs.db # Windows specific
+
+# Environment variables
+.env
+.env.*
+
+# Build output directories
+dist/
+build/
+
+# GoLand specific files
+.idea/
