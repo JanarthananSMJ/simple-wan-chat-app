@@ -105,19 +105,16 @@ func main() {
 	}
 	defer h.Close()
 
-	// Show peer info
 	fmt.Println("Peer ID:", h.ID())
-	fmt.Println("Peer MultiAddresses:")
+	fmt.Println("MultiAddresses:")
 	for _, a := range h.Addrs() {
 		fmt.Printf("%s/p2p/%s\n", a, h.ID())
 	}
 
-	// Handle incoming streams
 	h.SetStreamHandler(protocol, handleStream)
 
-	// Ask for friend's multiaddress
-	fmt.Print("Enter friend's MultiAddress (leave empty to wait for incoming): ")
 	reader := bufio.NewReader(os.Stdin)
+	fmt.Print("Enter friend's MultiAddress (leave empty to wait for incoming): ")
 	peerAddr, _ := reader.ReadString('\n')
 	peerAddr = strings.TrimSpace(peerAddr)
 
@@ -132,8 +129,8 @@ func main() {
 			log.Fatal("Stream open failed:", err)
 		}
 		rw := bufio.NewReadWriter(bufio.NewReader(stream), bufio.NewWriter(stream))
-		go writeMessages(rw)
 		go readMessages(rw)
+		writeMessages(rw) // this runs on main goroutine
 	}
 
 	select {} // keep program running
