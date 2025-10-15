@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/libp2p/go-libp2p"
 	"github.com/libp2p/go-libp2p/core/crypto"
@@ -18,13 +19,17 @@ import (
 
 const protocol = "/ipv6/1.0.0"
 
+var (
+	activeStream network.Stream
+	streamMutex  sync.Mutex
+)
+
 // create a new peer host
 func createPeer() (host.Host, error) {
 	priv, _, err := crypto.GenerateKeyPair(crypto.RSA, 2048)
 	if err != nil {
 		return nil, err
 	}
-
 	h, err := libp2p.New(
 		libp2p.Identity(priv),
 		libp2p.ListenAddrStrings("/ip6/::/tcp/0"), // listen on all IPv6
@@ -32,7 +37,6 @@ func createPeer() (host.Host, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	return h, nil
 }
 
@@ -42,26 +46,27 @@ func connectToPeer(ctx context.Context, h host.Host, addr string) (*peer.AddrInf
 	if err != nil {
 		return nil, fmt.Errorf("invalid multiaddress: %s", err)
 	}
-
 	info, err := peer.AddrInfoFromP2pAddr(maddr)
 	if err != nil {
 		return nil, fmt.Errorf("error getting peer info: %s", err)
 	}
-
 	if err := h.Connect(ctx, *info); err != nil {
 		return nil, fmt.Errorf("connection failed: %s", err)
 	}
-
 	fmt.Println("Connected to:", info.ID)
 	return info, nil
 }
 
 // handle incoming stream
 func handleStream(stream network.Stream) {
-	fmt.Println("Got a new stream from:", stream.Conn().RemotePeer())
+	fmt.Println("\nGot a new stream from:", stream.Conn().RemotePeer())
+
+	streamMutex.Lock()
+	activeStream = stream
+	streamMutex.Unlock()
+
 	rw := bufio.NewReadWriter(bufio.NewReader(stream), bufio.NewWriter(stream))
 	go readMessages(rw)
-	writeMessages(rw) // main goroutine handles typing
 }
 
 // read messages from stream
@@ -70,6 +75,9 @@ func readMessages(rw *bufio.ReadWriter) {
 		msg, err := rw.ReadString('\n')
 		if err != nil {
 			fmt.Println("\nConnection closed:", err)
+			streamMutex.Lock()
+			activeStream = nil
+			streamMutex.Unlock()
 			return
 		}
 		msg = strings.TrimSpace(msg)
@@ -79,16 +87,30 @@ func readMessages(rw *bufio.ReadWriter) {
 	}
 }
 
-// write messages to stream
-func writeMessages(rw *bufio.ReadWriter) {
+// write messages - this runs continuously in main
+func writeMessages() {
 	scanner := bufio.NewScanner(os.Stdin)
 	for {
 		fmt.Print("> ")
 		if !scanner.Scan() {
 			return
 		}
-		text := scanner.Text() + "\n"
-		_, err := rw.WriteString(text)
+		text := scanner.Text()
+		if text == "" {
+			continue
+		}
+
+		streamMutex.Lock()
+		stream := activeStream
+		streamMutex.Unlock()
+
+		if stream == nil {
+			fmt.Println("Not connected to any peer yet")
+			continue
+		}
+
+		rw := bufio.NewReadWriter(bufio.NewReader(stream), bufio.NewWriter(stream))
+		_, err := rw.WriteString(text + "\n")
 		if err != nil {
 			fmt.Println("Error writing:", err)
 			continue
@@ -99,7 +121,6 @@ func writeMessages(rw *bufio.ReadWriter) {
 
 func main() {
 	ctx := context.Background()
-
 	h, err := createPeer()
 	if err != nil {
 		log.Fatal(err)
@@ -116,7 +137,7 @@ func main() {
 	h.SetStreamHandler(protocol, handleStream)
 
 	reader := bufio.NewReader(os.Stdin)
-	fmt.Print("Enter friend's MultiAddress (leave empty to wait for incoming): ")
+	fmt.Print("\nEnter friend's MultiAddress (leave empty to wait for incoming): ")
 	peerAddr, _ := reader.ReadString('\n')
 	peerAddr = strings.TrimSpace(peerAddr)
 
@@ -126,16 +147,21 @@ func main() {
 		if err != nil {
 			log.Fatal(err)
 		}
-
 		stream, err := h.NewStream(ctx, info.ID, protocol)
 		if err != nil {
 			log.Fatal("Stream open failed:", err)
 		}
 
+		streamMutex.Lock()
+		activeStream = stream
+		streamMutex.Unlock()
+
 		rw := bufio.NewReadWriter(bufio.NewReader(stream), bufio.NewWriter(stream))
 		go readMessages(rw)
-		writeMessages(rw) // main goroutine handles typing
+	} else {
+		fmt.Println("Waiting for incoming connection...")
 	}
 
-	select {} // keep program running
+	// Both peers can now send and receive
+	writeMessages()
 }
